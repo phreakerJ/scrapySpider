@@ -28,6 +28,8 @@ class WebkitParser:
 
     def parse(self,response):
         webview = self._get_webview()
+        self.webview = webview
+
         win = gtk.Window()
         self.win=win
 
@@ -41,7 +43,10 @@ class WebkitParser:
         self.uri=response._get_url()
         page=response._get_body()
         webview.load_string(page,"text/html","iso-8859-15",self.uri)
+        tt=threading.Timer(5,self._webview_done)
+        tt.start()
         gtk.main()
+        tt.cancel()
 
     def _nav_request_policy_decision_cb(self,view,frame,net_req,nav_act,pol_dec):
             tmp_uri=net_req.get_uri()
@@ -61,7 +66,24 @@ class WebkitParser:
     def _webview_done(self):
         gtk.main_quit()
 
-    def _doc_load_finished(self, param1, param2):
+    def _doc_load_finished(self, view, frame):
+        ctx = jswebkit.JSContext(frame.get_global_context())
+        doc = ctx.EvaluateScript("document")
+        links = doc.getElementsByTagName(doc, "a")
+        for link in links:
+            self.links.append(link.href)
+        # nodes = doc.getElementsByTagName('body')
+        # body = nodes.item(0)
+
+        # d = doc.createElement("div")
+        # b = doc.createElement("Button")
+        # b.innerHTML = "hello"
+        # b.onclick = self._button_click_event
+        # d.appendChild(b)
+        # txt = doc.createTextNode("hello world")
+        # body.appendChild(txt)
+        # body.appendChild(d)
+        # body.tabIndex = 5
         threading.Timer(2,self._webview_done).start()
 
 
@@ -85,7 +107,7 @@ class WebkitParser:
 
 sqlc=None
 
-def checkAndInsertURL(tmp_uri):
+def checkAndInsertURL(tmp_uri,tmp_retcode="",tmp_html="",tmp_header="",tmp_comment=""):
     global sqlc
     tparams = (tmp_uri,)
     tq1=sqlc.cursor().execute("SELECT url from urls where url=?",tparams)
@@ -94,8 +116,8 @@ def checkAndInsertURL(tmp_uri):
         tc1=tc1+1
     if tc1==0:
         print "Inserting to urls db <--- [%s]"%tmp_uri
-        tparams=(tmp_uri,'','','',)
-        sqlc.cursor().execute("INSERT INTO urls VALUES (?,?,?,?)",tparams)
+        tparams=(tmp_uri,tmp_retcode,tmp_html,tmp_header,tmp_comment,)
+        sqlc.cursor().execute("INSERT INTO urls VALUES (?,?,?,?,?)",tparams)
         sqlc.commit()
 
 class WebKitLinkExtractor(LxmlLinkExtractor):
@@ -107,8 +129,12 @@ class WebKitLinkExtractor(LxmlLinkExtractor):
                      tags, attrs, canonicalize, unique, process_value,
                      deny_extensions)
 
-
     def extract_links(self,response):
+        tmp_uri=response._get_url()
+        tmp_retcode="%d"%response.status
+        tmp_html=response._get_body()
+        tmp_header="%s"%response.headers
+        checkAndInsertURL(tmp_uri,tmp_retcode,tmp_html,tmp_header,"")
         ret=None
         wp=WebkitParser()
         wp.parse(response)
@@ -116,15 +142,16 @@ class WebKitLinkExtractor(LxmlLinkExtractor):
         links=[]
         for tmp_uri in wp.links:
             links.append(Link(tmp_uri))
-        ret=super(WebKitLinkExtractor,self).extract_links(response)
-        if ret==None:
-            ret=[]
+        ret=[]
+        # ret=super(WebKitLinkExtractor,self).extract_links(response)
+        # if ret==None:
+        #     ret=[]
         for link in links:
             ret.append(link)
-        for link in ret:
-            tmp_uri=link.url
-            # print "---> %s"%tmp_uri
-            checkAndInsertURL(tmp_uri)
+        # for link in ret:
+        #     tmp_uri=link.url
+        #     print "---> %s"%tmp_uri
+        # print ret
         return ret
 
 
@@ -134,6 +161,7 @@ class MySpider(CrawlSpider):
     rules = [
         Rule(WebKitLinkExtractor(allow=()), callback='parse_item', follow=True)
     ]
+    handle_httpstatus_list=range(0,1000)
 
     def __init__(self, *args, **kwargs):
         global sqlc
@@ -146,28 +174,28 @@ class MySpider(CrawlSpider):
 
         self.start_urls = start_urls
 
-        db_name = kwargs.get('db','url.db')
+        db_name = kwargs.get('db','urls.db')
         conn = sqlite3.connect(db_name)
+        conn.text_factory = str
         sqlc = conn
         rows=sqlc.cursor().execute("SELECT name FROM sqlite_master WHERE type='table' AND name='urls';")
         count = 0
         for row in rows:
             count += 1
         if count==0:
-            sqlc.cursor().execute("CREATE TABLE urls(url text, server text, framework text, os text)");
+            sqlc.cursor().execute("CREATE TABLE urls(url text, status text, html text, headers text, comments text)");
 
-        for tmp_uri in self.start_urls:
-            checkAndInsertURL(tmp_uri)
+        # for tmp_uri in self.start_urls:
+        #     checkAndInsertURL(tmp_uri)
 
         # print start_urls
 
-    # def set_crawler(self, crawler):
-    #     crawler.settings.set("DOWNLOAD_HANDLERS",{'http': 'test.WebkitDownloadHandler','https': 'test.WebkitDownloadHandler'})
-    #     super(TestSpider, self).set_crawler(crawler)
+    def set_crawler(self, crawler):
+        crawler.settings.set("DOWNLOAD_TIMEOUT",10)
+        super(MySpider, self).set_crawler(crawler)
 
     def parse_item(self, response):
-        fp=open("/tmp/fuck.txt","wb")
-        fp.close()
+        print ""
         # sel = scrapy.selector.Selector(response)
         # questions = sel.css('#question-mini-list .question-summary')
         # for i, elem in enumerate(questions):
