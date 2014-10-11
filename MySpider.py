@@ -1,4 +1,4 @@
-from selenium import selenium
+# from selenium import selenium
 from scrapy.contrib.spiders import CrawlSpider, Rule
 from scrapy.contrib.linkextractors.lxmlhtml import LxmlLinkExtractor
 from scrapy.http import Request
@@ -8,11 +8,11 @@ import scrapy
 import gtk
 import webkit
 import jswebkit
-from twisted.internet import defer
+# from twisted.internet import defer
 
-from scrapy.core.downloader.handlers.http import HttpDownloadHandler
-from scrapy.http import HtmlResponse
-from scrapy import log
+# from scrapy.core.downloader.handlers.http import HttpDownloadHandler
+# from scrapy.http import HtmlResponse
+# from scrapy import log
 
 import time
 
@@ -23,6 +23,8 @@ import threading
 import random
 
 import sqlite3
+
+import urlparse
 
 class WebkitParser: 
 
@@ -38,6 +40,7 @@ class WebkitParser:
         # webview.connect("console-message", self._console_message)
         webview.connect("navigation-policy-decision-requested",self._nav_request_policy_decision_cb)
         webview.connect('document-load-finished', self._doc_load_finished)
+        webview.connect('script-alert',self._script_alert)
         win.add(webview)
         win.hide_all()
         self.uri=response._get_url()
@@ -86,6 +89,9 @@ class WebkitParser:
         # body.tabIndex = 5
         threading.Timer(2,self._webview_done).start()
 
+    def _script_alert(self, view, frame, msg):
+        print "Javascript Alert:[%s]"%msg
+        return True
 
     def _get_webview(self):
         webview = webkit.WebView()
@@ -107,7 +113,7 @@ class WebkitParser:
 
 sqlc=None
 
-def checkAndInsertURL(tmp_uri,tmp_retcode="",tmp_html="",tmp_header="",tmp_comment=""):
+def checkAndInsertURL(tmp_uri,tmp_server="",tmp_retcode="",tmp_html="",tmp_header="",tmp_comment=""):
     global sqlc
     tparams = (tmp_uri,)
     tq1=sqlc.cursor().execute("SELECT url from urls where url=?",tparams)
@@ -116,8 +122,8 @@ def checkAndInsertURL(tmp_uri,tmp_retcode="",tmp_html="",tmp_header="",tmp_comme
         tc1=tc1+1
     if tc1==0:
         print "Inserting to urls db <--- [%s]"%tmp_uri
-        tparams=(tmp_uri,tmp_retcode,tmp_html,tmp_header,tmp_comment,)
-        sqlc.cursor().execute("INSERT INTO urls VALUES (?,?,?,?,?)",tparams)
+        tparams=(tmp_uri,tmp_server,tmp_retcode,tmp_html,tmp_header,tmp_comment,)
+        sqlc.cursor().execute("INSERT INTO urls VALUES (?,?,?,?,?,?)",tparams)
         sqlc.commit()
 
 class WebKitLinkExtractor(LxmlLinkExtractor):
@@ -130,18 +136,36 @@ class WebKitLinkExtractor(LxmlLinkExtractor):
                      deny_extensions)
 
     def extract_links(self,response):
+        global global_starturls
         tmp_uri=response._get_url()
         tmp_retcode="%d"%response.status
         tmp_html=response._get_body()
         tmp_header="%s"%response.headers
-        checkAndInsertURL(tmp_uri,tmp_retcode,tmp_html,tmp_header,"")
+        if response.headers.has_key('server'):
+            tmp_server="%s"%response.headers['server']
+        else:
+            tmp_server=""
+        checkAndInsertURL(tmp_uri,tmp_server,tmp_retcode,tmp_html,tmp_header,"")
         ret=None
         wp=WebkitParser()
         wp.parse(response)
         # lock.acquire()
         links=[]
         for tmp_uri in wp.links:
-            links.append(Link(tmp_uri))
+            up = urlparse.urlparse(tmp_uri)
+            if up.scheme.startswith("javascript"):
+                continue
+            flag_allow=False
+            for uri in global_starturls:
+                tup = urlparse.urlparse(uri)
+                thost = tup.netloc.split(":")[0]
+                print tup,thost
+                if up.netloc.startswith(thost):
+                   flag_allow=True
+                   break
+            if flag_allow:
+                links.append(Link(tmp_uri))
+            # links.append(Link(tmp_uri))
         ret=[]
         # ret=super(WebKitLinkExtractor,self).extract_links(response)
         # if ret==None:
@@ -154,7 +178,7 @@ class WebKitLinkExtractor(LxmlLinkExtractor):
         # print ret
         return ret
 
-
+global_starturls=[]
 
 class MySpider(CrawlSpider):
     name = 'MySpider'
@@ -165,6 +189,8 @@ class MySpider(CrawlSpider):
 
     def __init__(self, *args, **kwargs):
         global sqlc
+        global global_starturls
+
         super(MySpider, self).__init__(*args, **kwargs) 
         #self.start_urls=['https://204.186.159.24/']
         urls_num = int(kwargs.get('urls_num','0'))
@@ -173,6 +199,7 @@ class MySpider(CrawlSpider):
             start_urls.append(kwargs.get('start_url{0}'.format(i),''))
 
         self.start_urls = start_urls
+        global_starturls = start_urls       
 
         db_name = kwargs.get('db','urls.db')
         conn = sqlite3.connect(db_name)
@@ -183,7 +210,7 @@ class MySpider(CrawlSpider):
         for row in rows:
             count += 1
         if count==0:
-            sqlc.cursor().execute("CREATE TABLE urls(url text, status text, html text, headers text, comments text)");
+            sqlc.cursor().execute("CREATE TABLE urls(url text, server text, status text, html text, headers text, comments text)");
 
         # for tmp_uri in self.start_urls:
         #     checkAndInsertURL(tmp_uri)
