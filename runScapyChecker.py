@@ -9,7 +9,7 @@ taskQueue = Queue.Queue(10000000)
 count = 0
 
 def genTask(proto,ip): # Generate the command and file name
-    cmd = ["scrapy runspider ../scrapySpider/MySpider.py -a db=./urls.db -a urls_num=1 -a start_url1=%s://%s"%(proto,ip), "out/%s.txt"%(ip)]
+    cmd = ["scrapy runspider ../scrapySpider/MySpider.py -a db=./urls_new.db -a urls_num=1 -a start_url1=%s://%s"%(proto,ip), "out/%s.txt"%(ip)]
 #    print cmd
     return cmd
 
